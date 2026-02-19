@@ -11,7 +11,7 @@ public class Plugin : TerrariaPlugin
     public override string Name => "TravelingMerchantHelper";
     public override string Author => "淦";
     public override string Description => "通过指令刷新旅商商店（移除旧旅商，生成新旅商）";
-    public override Version Version => new(2025, 4, 1, 16);
+    public override Version Version => new(2026, 2, 19, 4);
 
     public Plugin(Main game) : base(game) { }
 
