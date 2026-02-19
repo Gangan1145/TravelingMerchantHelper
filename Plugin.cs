@@ -11,45 +11,97 @@ public class Plugin : TerrariaPlugin
 {
     public override string Name => "TravelingMerchantHelper";
     public override string Author => "淦";
-    public override string Description => "旅商不再自动离开，可通过指令刷新商店";
-    public override Version Version => new(2026, 2, 19, 1);
+    public override string Description => "旅商永不离开（终极复活版），可指令刷新商店";
+    public override Version Version => new(2026, 2, 19, 2);
 
     public Plugin(Main game) : base(game) { }
 
+    private bool _merchantKilled = false; // 标记旅商是否被玩家击杀
+
     public override void Initialize()
     {
-        // 使用 GameUpdate 钩子（兼容所有 TShock 版本）
         ServerApi.Hooks.GameUpdate.Register(this, OnGameUpdate);
-        
+        ServerApi.Hooks.NpcKilled.Register(this, OnNpcKilled); // 监听击杀事件
+
         Commands.ChatCommands.Add(new Command("tshock.refreshshop", RefreshShop, "refreshshop", "rs")
         {
-            HelpText = "刷新旅商的当前商品列表"
+            HelpText = "刷新旅商商店（移除旧旅商，生成新旅商）"
         });
     }
 
-    protected override void Dispose(bool disposing)
+    private void OnNpcKilled(NpcKilledEventArgs args)
     {
-        if (disposing)
-        {
-            ServerApi.Hooks.GameUpdate.Deregister(this, OnGameUpdate);
-        }
-        base.Dispose(disposing);
+        if (args.npc?.type == NPCID.TravellingMerchant)
+            _merchantKilled = true; // 记录被击杀
     }
 
-    // 每帧检查所有 NPC，重置旅商的离开计时器
     private void OnGameUpdate(EventArgs args)
     {
+        bool hasActiveMerchant = false;
+
         for (int i = 0; i < Main.maxNPCs; i++)
         {
             NPC npc = Main.npc[i];
-            if (npc != null && npc.active && npc.type == NPCID.TravellingMerchant)
+            if (npc?.type != NPCID.TravellingMerchant)
+                continue;
+
+            if (npc.active)
             {
-                npc.ai[0] = 0f; // 重置 ai[0] 阻止离开
+                hasActiveMerchant = true;
+                // 重置所有AI值，强制标记为城镇NPC
+                for (int j = 0; j < npc.ai.Length; j++)
+                    npc.ai[j] = 0f;
+                npc.townNPC = true;
+                npc.netAlways = true;
+                npc.netUpdate = true;
             }
+            else if (npc.life > 0) // 非死亡消失（游戏主动移除）
+            {
+                if (_merchantKilled) continue; // 被击杀的不复活
+
+                // 复活旅商
+                npc.active = true;
+                npc.life = npc.lifeMax;
+                for (int j = 0; j < npc.ai.Length; j++)
+                    npc.ai[j] = 0f;
+                npc.townNPC = true;
+                npc.netAlways = true;
+                npc.netUpdate = true;
+
+                // 传送到最近玩家身边
+                TeleportToNearestPlayer(npc);
+                hasActiveMerchant = true;
+            }
+        }
+
+        // 如果没有活跃旅商且未被击杀，尝试生成
+        if (!hasActiveMerchant && !_merchantKilled)
+            WorldGen.SpawnTravelNPC();
+    }
+
+    private void TeleportToNearestPlayer(NPC npc)
+    {
+        TSPlayer nearest = null;
+        double nearestDist = double.MaxValue;
+        foreach (TSPlayer plr in TShock.Players)
+        {
+            if (plr?.Active != true) continue;
+            double dist = Math.Abs(plr.X - npc.position.X) + Math.Abs(plr.Y - npc.position.Y);
+            if (dist < nearestDist)
+            {
+                nearestDist = dist;
+                nearest = plr;
+            }
+        }
+
+        if (nearest != null)
+        {
+            npc.position.X = nearest.X;
+            npc.position.Y = nearest.Y - 3 * 16;
+            npc.netUpdate = true;
         }
     }
 
-    // 指令处理：刷新旅商商店（使用反射调用）
     private void RefreshShop(CommandArgs args)
     {
         if (!args.Player.HasPermission("tshock.refreshshop"))
@@ -58,24 +110,32 @@ public class Plugin : TerrariaPlugin
             return;
         }
 
-        try
+        // 移除现有旅商
+        for (int i = 0; i < Main.maxNPCs; i++)
         {
-            // 反射调用 WorldGen.TravelShop，避免编译时符号错误
-            MethodInfo travelShopMethod = typeof(WorldGen).GetMethod("TravelShop", BindingFlags.Public | BindingFlags.Static);
-            if (travelShopMethod != null)
+            NPC npc = Main.npc[i];
+            if (npc?.active == true && npc.type == NPCID.TravellingMerchant)
             {
-                travelShopMethod.Invoke(null, null);
-                TSPlayer.All.SendSuccessMessage("[旅商助手] 旅商的商品已刷新！");
-                args.Player.SendSuccessMessage("已刷新旅商商店，与旅商对话查看新商品。");
-            }
-            else
-            {
-                args.Player.SendErrorMessage("刷新商店失败：找不到 TravelShop 方法，请确认 Terraria 版本。");
+                npc.active = false;
+                npc.netUpdate = true;
+                break;
             }
         }
-        catch (Exception ex)
+
+        _merchantKilled = false; // 重置击杀标记，允许新旅商受保护
+        WorldGen.SpawnTravelNPC(); // 生成新旅商
+
+        TSPlayer.All.SendSuccessMessage("[旅商助手] 旅商的商品已刷新！新的旅商正在到来。");
+        args.Player.SendSuccessMessage("已刷新旅商商店，稍后与其对话查看新商品。");
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
         {
-            args.Player.SendErrorMessage($"刷新商店时发生错误：{ex.Message}");
+            ServerApi.Hooks.GameUpdate.Deregister(this, OnGameUpdate);
+            ServerApi.Hooks.NpcKilled.Deregister(this, OnNpcKilled);
         }
+        base.Dispose(disposing);
     }
 }
