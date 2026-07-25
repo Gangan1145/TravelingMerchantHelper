@@ -34,6 +34,6 @@
 
 ## 反馈
 
-- 优先提交 Issue 至插件维护仓库：https://github.com/你的用户名/TravelingMerchantHelper
+- 优先提交 Issue 至插件维护仓库：[https://github.com/你的用户名/TravelingMerchantHelper](https://github.com/Gangan1145/TravelingMerchantHelper.git)
 - TShock 官方群：816771079
 - 国内社区：trhub.cn , bbstr.net , tr.monika.love
